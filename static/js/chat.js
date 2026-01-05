@@ -241,8 +241,7 @@ async function selectTopic(topicId) {
     currentTopicId = topicId;
     const topic = topics.find(t => t.id === topicId);
     if (topic) {
-        const ownerInfo = topic.is_owner ? '' : ` (由 ${topic.username} 创建)`;
-        currentTopicTitle.textContent = topic.title + ownerInfo;
+        currentTopicTitle.textContent = topic.title;
     }
     
     // 所有有权限访问话题的用户都可以发送消息
@@ -281,8 +280,17 @@ function renderMessages(messages) {
     messages.forEach(msg => {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${msg.role}`;
+        
+        // 获取头像文字：用户消息显示当前用户名的首字母，助手消息显示'A'
+        let avatarText = 'A';
+        if (msg.role === 'user') {
+            // 使用当前用户名的首字母（大写）
+            const username = window.currentUsername || 'U';
+            avatarText = username.charAt(0).toUpperCase();
+        }
+        
         messageDiv.innerHTML = `
-            <div class="message-avatar">${msg.role === 'user' ? 'U' : 'A'}</div>
+            <div class="message-avatar">${avatarText}</div>
             <div class="message-content">${escapeHtml(msg.content)}</div>
         `;
         chatMessages.appendChild(messageDiv);
@@ -495,8 +503,7 @@ async function saveTopicEdit() {
             closeEditModalFunc();
             await loadTopics();
             if (currentTopicId === editingTopicId) {
-                const ownerInfo = updatedTopic.is_owner ? '' : ` (由 ${updatedTopic.username} 创建)`;
-                currentTopicTitle.textContent = newTitle + ownerInfo;
+                currentTopicTitle.textContent = newTitle;
             }
         } else {
             const error = await response.json();

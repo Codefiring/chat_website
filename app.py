@@ -548,6 +548,20 @@ if __name__ == '__main__':
             if 'provider_config' not in table_names:
                 db.create_all()
                 print("✓ 数据库已自动迁移：创建了 provider_config 表")
+            
+            # 检查并添加 user 表的 is_admin 字段
+            if 'user' in table_names:
+                user_columns = [col['name'] for col in inspector.get_columns('user')]
+                if 'is_admin' not in user_columns:
+                    if 'sqlite' in str(db.engine.url):
+                        db.session.execute(text('ALTER TABLE user ADD COLUMN is_admin BOOLEAN'))
+                        db.session.execute(text('UPDATE user SET is_admin = 0 WHERE is_admin IS NULL'))
+                        db.session.execute(text('UPDATE user SET is_admin = 1 WHERE username = "admin"'))
+                    else:
+                        db.session.execute(text('ALTER TABLE user ADD COLUMN is_admin BOOLEAN DEFAULT 0'))
+                        db.session.execute(text('UPDATE user SET is_admin = 1 WHERE username = \'admin\''))
+                    db.session.commit()
+                    print("✓ 数据库已自动迁移：添加了 is_admin 字段")
                 
         except Exception as e:
             print(f"数据库迁移检查完成（如果这是首次运行，这是正常的）")
