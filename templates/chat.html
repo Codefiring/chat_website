@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}聊天 - 聊天网站{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>聊天话题</h2>
+            <button class="btn-icon" id="newChatBtn" title="新建对话">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+            </button>
+        </div>
+        
+        <div class="sidebar-content">
+            <div id="topicsList" class="topics-list">
+                <!-- 话题列表将在这里动态加载 -->
+            </div>
+        </div>
+        
+        <div class="sidebar-footer">
+            <button class="btn btn-secondary btn-block" id="providerConfigBtn" style="margin-bottom: 8px;">服务配置</button>
+            <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-block">退出登录</a>
+        </div>
+    </aside>
+    
+    <!-- 主聊天区域 -->
+    <main class="chat-main">
+        <div class="chat-header">
+            <h3 id="currentTopicTitle">选择一个话题开始聊天</h3>
+        </div>
+        
+        <div class="chat-messages" id="chatMessages">
+            <div class="welcome-message">
+                <p>👋 欢迎使用聊天网站</p>
+                <p>点击左侧"+"按钮创建新对话，或选择一个已有的话题</p>
+            </div>
+        </div>
+        
+        <div class="chat-input-container">
+            <form id="chatForm" class="chat-form">
+                <textarea 
+                    id="messageInput" 
+                    placeholder="输入消息..." 
+                    rows="1"
+                    disabled
+                ></textarea>
+                <button type="submit" class="btn btn-primary" id="sendBtn" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </form>
+        </div>
+    </main>
+</div>
+
+<!-- 话题编辑模态框 -->
+<div id="editTopicModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>编辑话题</h3>
+            <button class="btn-icon" id="closeEditModal">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="editTopicTitle">话题标题</label>
+                <input type="text" id="editTopicTitle" placeholder="话题标题">
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="editTopicPublic">
+                    <span>所有用户可见</span>
+                </label>
+                <p class="form-hint">取消勾选后，只有您和选中的用户可以查看此对话</p>
+            </div>
+            <div class="form-group" id="editUserSelectionGroup" style="display: none;">
+                <label>选择可访问的用户</label>
+                <div id="editUserList" class="user-checkbox-list">
+                    <!-- 用户列表将在这里动态加载 -->
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="editEnableModel">
+                    <span>启用AI模型</span>
+                </label>
+                <p class="form-hint">启用后，AI将自动回复您的消息</p>
+            </div>
+            <div class="form-group" id="editModelSelectionGroup" style="display: none;">
+                <label for="editModelName">选择模型</label>
+                <select id="editModelName" class="form-select">
+                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancelEdit">取消</button>
+            <button class="btn btn-primary" id="saveEdit">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 创建话题模态框 -->
+<div id="createTopicModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>创建新话题</h3>
+            <button class="btn-icon" id="closeCreateModal">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="createTopicTitle">话题标题</label>
+                <input type="text" id="createTopicTitle" placeholder="话题标题" value="新对话">
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="createTopicPublic" checked>
+                    <span>所有用户可见</span>
+                </label>
+                <p class="form-hint">取消勾选后，只有您和选中的用户可以查看此对话</p>
+            </div>
+            <div class="form-group" id="createUserSelectionGroup" style="display: none;">
+                <label>选择可访问的用户</label>
+                <div id="createUserList" class="user-checkbox-list">
+                    <!-- 用户列表将在这里动态加载 -->
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="createEnableModel">
+                    <span>启用AI模型</span>
+                </label>
+                <p class="form-hint">启用后，AI将自动回复您的消息</p>
+            </div>
+            <div class="form-group" id="createModelSelectionGroup" style="display: none;">
+                <label for="createModelName">选择模型</label>
+                <select id="createModelName" class="form-select">
+                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancelCreate">取消</button>
+            <button class="btn btn-primary" id="saveCreate">创建</button>
+        </div>
+    </div>
+</div>
+
+<!-- 服务提供商配置模态框 -->
+<div id="providerConfigModal" class="modal">
+    <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+            <h3>服务提供商配置</h3>
+            <button class="btn-icon" id="closeProviderModal">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div id="providerList" style="margin-bottom: 20px;">
+                <!-- 提供商列表将在这里显示 -->
+            </div>
+            <div class="form-group">
+                <label for="providerName">配置名称</label>
+                <input type="text" id="providerName" placeholder="例如：OpenAI官方">
+            </div>
+            <div class="form-group">
+                <label for="providerApiKey">API密钥</label>
+                <input type="password" id="providerApiKey" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+                <label for="providerBaseUrl">API基础URL（可选）</label>
+                <input type="text" id="providerBaseUrl" placeholder="https://api.openai.com/v1">
+                <p class="form-hint">留空则使用默认URL，可用于自定义API端点</p>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="providerIsDefault">
+                    <span>设为默认配置</span>
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancelProvider">取消</button>
+            <button class="btn btn-primary" id="saveProvider">保存</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}
+
