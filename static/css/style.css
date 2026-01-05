@@ -659,6 +659,99 @@ body {
     background: var(--border);
 }
 
+/* 管理员页面样式 */
+.admin-container {
+    min-height: 100vh;
+    background: var(--bg-primary);
+    padding: 24px;
+}
+
+.admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.admin-header h1 {
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.admin-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.admin-content {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.admin-section {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 24px;
+    border: 1px solid var(--border);
+}
+
+.admin-section h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 20px;
+}
+
+.users-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.user-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.user-item-info {
+    flex: 1;
+}
+
+.user-item-name {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.admin-badge {
+    font-size: 12px;
+    padding: 2px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+}
+
+.user-item-details {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.user-item-actions {
+    display: flex;
+    gap: 8px;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
     .sidebar {
@@ -667,6 +760,26 @@ body {
     
     .message {
         max-width: 90%;
+    }
+    
+    .admin-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+    }
+    
+    .user-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    
+    .user-item-actions {
+        width: 100%;
+    }
+    
+    .user-item-actions .btn {
+        flex: 1;
     }
 }
 

@@ -24,6 +24,10 @@
         
         <div class="sidebar-footer">
             <button class="btn btn-secondary btn-block" id="providerConfigBtn" style="margin-bottom: 8px;">服务配置</button>
+            <a href="{{ url_for('change_password') }}" class="btn btn-secondary btn-block" style="margin-bottom: 8px;">修改密码</a>
+            {% if current_user.is_admin %}
+            <a href="{{ url_for('admin') }}" class="btn btn-secondary btn-block" style="margin-bottom: 8px;">用户管理</a>
+            {% endif %}
             <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-block">退出登录</a>
         </div>
     </aside>

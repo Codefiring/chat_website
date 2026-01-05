@@ -245,15 +245,11 @@ async function selectTopic(topicId) {
         currentTopicTitle.textContent = topic.title + ownerInfo;
     }
     
-    // 只有话题所有者可以发送消息
-    const canSendMessage = topic && topic.is_owner;
-    messageInput.disabled = !canSendMessage;
-    sendBtn.disabled = !canSendMessage;
-    if (canSendMessage) {
-        messageInput.focus();
-    } else {
-        messageInput.placeholder = '只有话题所有者可以发送消息';
-    }
+    // 所有有权限访问话题的用户都可以发送消息
+    messageInput.disabled = false;
+    sendBtn.disabled = false;
+    messageInput.placeholder = '输入消息...（使用@模型来调用AI）';
+    messageInput.focus();
     
     await loadMessages(topicId);
     renderTopics();

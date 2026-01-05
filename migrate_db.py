@@ -60,6 +60,22 @@ with app.app_context():
             db.create_all()
             print("✓ 已创建 topic_permissions 表")
         
+        # 检查 user 表的 is_admin 字段
+        if 'user' in table_names:
+            user_columns = [col['name'] for col in inspector.get_columns('user')]
+            if 'is_admin' not in user_columns:
+                print("正在添加 is_admin 字段...")
+                if 'sqlite' in str(db.engine.url):
+                    db.session.execute(text('ALTER TABLE user ADD COLUMN is_admin BOOLEAN'))
+                    db.session.execute(text('UPDATE user SET is_admin = 0 WHERE is_admin IS NULL'))
+                    # 将admin用户设置为管理员
+                    db.session.execute(text('UPDATE user SET is_admin = 1 WHERE username = "admin"'))
+                else:
+                    db.session.execute(text('ALTER TABLE user ADD COLUMN is_admin BOOLEAN DEFAULT 0'))
+                    db.session.execute(text('UPDATE user SET is_admin = 1 WHERE username = \'admin\''))
+                db.session.commit()
+                print("✓ 已添加 is_admin 字段")
+        
         print("✓ 数据库迁移完成！")
         
     except Exception as e:

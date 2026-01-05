@@ -8,6 +8,7 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)  # 是否为管理员
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     topics = db.relationship('ChatTopic', backref='user', lazy=True, cascade='all, delete-orphan')

@@ -87,6 +87,102 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
+@app.route('/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    if request.method == 'POST':
+        old_password = request.form.get('old_password')
+        new_password = request.form.get('new_password')
+        confirm_password = request.form.get('confirm_password')
+        
+        if not old_password or not new_password or not confirm_password:
+            flash('请填写所有字段', 'error')
+            return render_template('change_password.html')
+        
+        if new_password != confirm_password:
+            flash('两次输入的新密码不一致', 'error')
+            return render_template('change_password.html')
+        
+        if not check_password_hash(current_user.password_hash, old_password):
+            flash('原密码错误', 'error')
+            return render_template('change_password.html')
+        
+        current_user.password_hash = generate_password_hash(new_password)
+        db.session.commit()
+        flash('密码修改成功', 'success')
+        return redirect(url_for('chat'))
+    
+    return render_template('change_password.html')
+
+@app.route('/admin')
+@login_required
+def admin():
+    # 检查是否为管理员
+    if not current_user.is_admin:
+        flash('您没有管理员权限', 'error')
+        return redirect(url_for('chat'))
+    return render_template('admin.html')
+
+@app.route('/api/admin/users', methods=['GET'])
+@login_required
+def get_all_users():
+    """获取所有用户（管理员功能）"""
+    if not current_user.is_admin:
+        return jsonify({'error': '无权访问'}), 403
+    
+    users = User.query.order_by(User.created_at.desc()).all()
+    return jsonify([{
+        'id': user.id,
+        'username': user.username,
+        'is_admin': user.is_admin,
+        'created_at': user.created_at.isoformat()
+    } for user in users])
+
+@app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
+@login_required
+def update_user(user_id):
+    """更新用户信息（管理员功能）"""
+    if not current_user.is_admin:
+        return jsonify({'error': '无权访问'}), 403
+    
+    user = User.query.get_or_404(user_id)
+    data = request.get_json()
+    
+    if 'is_admin' in data:
+        # 不能取消自己的管理员权限
+        if user_id == current_user.id and not data.get('is_admin'):
+            return jsonify({'error': '不能取消自己的管理员权限'}), 400
+        user.is_admin = data.get('is_admin')
+    
+    if 'password' in data and data.get('password'):
+        user.password_hash = generate_password_hash(data.get('password'))
+    
+    db.session.commit()
+    
+    return jsonify({
+        'id': user.id,
+        'username': user.username,
+        'is_admin': user.is_admin
+    })
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+@login_required
+def delete_user(user_id):
+    """删除用户（管理员功能）"""
+    if not current_user.is_admin:
+        return jsonify({'error': '无权访问'}), 403
+    
+    user = User.query.get_or_404(user_id)
+    
+    # 不能删除自己
+    if user_id == current_user.id:
+        return jsonify({'error': '不能删除自己的账户'}), 400
+    
+    db.session.delete(user)
+    db.session.commit()
+    
+    return jsonify({'success': True})
+
 @app.route('/chat')
 @login_required
 def chat():
@@ -287,9 +383,16 @@ def get_messages(topic_id):
 def create_message(topic_id):
     topic = ChatTopic.query.get_or_404(topic_id)
     
-    # 只允许话题所有者发送消息
-    if topic.user_id != current_user.id:
-        return jsonify({'error': '只有话题所有者可以发送消息'}), 403
+    # 检查用户是否有权限访问此话题
+    from models import topic_permissions
+    has_permission = (
+        topic.is_public or 
+        topic.user_id == current_user.id or
+        current_user.id in [user.id for user in topic.allowed_users]
+    )
+    
+    if not has_permission:
+        return jsonify({'error': '无权访问此话题'}), 403
     
     data = request.get_json()
     role = data.get('role', 'user')
@@ -309,19 +412,34 @@ def create_message(topic_id):
     topic.updated_at = datetime.utcnow()
     db.session.commit()
     
-    # 如果是用户消息且启用了模型，调用AI生成回复
+    # 检查是否@模型（消息中包含@模型或@model等关键词）
+    should_call_ai = False
     if role == 'user' and topic.enable_model:
+        # 检查消息中是否包含@模型相关的关键词
+        content_lower = content.lower()
+        ai_keywords = ['@模型', '@model', '@ai', '@assistant', '@助手']
+        should_call_ai = any(keyword in content_lower for keyword in ai_keywords)
+    
+    # 只有@模型时才调用AI生成回复
+    if should_call_ai:
         try:
-            assistant_content = generate_ai_response(topic_id, content, topic.model_name)
-            if assistant_content:
-                assistant_message = Message(
-                    topic_id=topic_id,
-                    role='assistant',
-                    content=assistant_content
-                )
-                db.session.add(assistant_message)
-                topic.updated_at = datetime.utcnow()
-                db.session.commit()
+            # 移除@关键词，只保留实际内容
+            clean_content = content
+            for keyword in ai_keywords:
+                clean_content = clean_content.replace(keyword, '').replace(keyword.upper(), '').replace(keyword.capitalize(), '')
+            clean_content = clean_content.strip()
+            
+            if clean_content:
+                assistant_content = generate_ai_response(topic_id, clean_content, topic.model_name)
+                if assistant_content:
+                    assistant_message = Message(
+                        topic_id=topic_id,
+                        role='assistant',
+                        content=assistant_content
+                    )
+                    db.session.add(assistant_message)
+                    topic.updated_at = datetime.utcnow()
+                    db.session.commit()
         except Exception as e:
             print(f"AI回复生成失败: {e}")
             # 即使AI失败，用户消息也已经保存
