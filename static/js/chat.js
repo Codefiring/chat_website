@@ -282,14 +282,12 @@ function renderMessages(messages) {
     
     messages.forEach(msg => {
         const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${msg.role}`;
+        const senderName = msg.username || (msg.role === 'assistant' ? 'LLM' : (window.currentUsername || 'U'));
+        const isSelf = senderName === (window.currentUsername || '');
+        messageDiv.className = `message ${isSelf ? 'self' : 'other'}`;
         
-        // 获取头像文字：用户消息显示当前用户名前三个字符，助手消息显示'A'
-        let avatarText = 'A';
-        if (msg.role === 'user') {
-            const username = window.currentUsername || 'U';
-            avatarText = Array.from(username).slice(0, 3).join('').toUpperCase();
-        }
+        // 获取头像文字：使用发送消息的用户名的前三个字符
+        const avatarText = Array.from(senderName).slice(0, 3).join('').toUpperCase();
         
         let contentHtml = '';
         if (msg.image_url) {
@@ -759,6 +757,7 @@ async function sendImageMessage(imageUrl, textContent = '') {
         id: Date.now(),
         role: 'user',
         content: textContent,
+        username: window.currentUsername || 'U',
         image_url: imageUrl,
         created_at: new Date().toISOString()
     };
@@ -823,6 +822,7 @@ async function handleSendMessage(e) {
         id: Date.now(),
         role: 'user',
         content: content,
+        username: window.currentUsername || 'U',
         created_at: new Date().toISOString()
     };
     
@@ -882,7 +882,20 @@ function shouldCallLlm(content) {
         /@assistant/i,
         /@助手/i
     ];
-    return patterns.some(pattern => pattern.test(content));
+    if (patterns.some(pattern => pattern.test(content))) {
+        return true;
+    }
+    if (providers && providers.length > 0) {
+        return providers.some(provider => {
+            if (!provider || !provider.name) {
+                return false;
+            }
+            const escapedName = provider.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = new RegExp(`@\\s*${escapedName}\\b`, 'i');
+            return pattern.test(content);
+        });
+    }
+    return false;
 }
 
 // HTML 转义

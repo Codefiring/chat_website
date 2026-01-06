@@ -488,6 +488,8 @@ def get_messages(topic_id):
         'id': msg.id,
         'role': msg.role,
         'content': msg.content,
+        'username': resolve_message_username(msg),
+        'image_url': msg.image_url,
         'created_at': msg.created_at.isoformat()
     } for msg in messages])
 
@@ -519,7 +521,8 @@ def create_message(topic_id):
         topic_id=topic_id,
         role=role,
         content=content or '',
-        image_url=image_url
+        image_url=image_url,
+        user_id=current_user.id if role == 'user' else None
     )
     db.session.add(message)
     
@@ -529,6 +532,7 @@ def create_message(topic_id):
     
     # 检查是否@模型（消息中包含@llm或@模型等关键词）
     should_call_ai = False
+    provider_for_message = None
     if role == 'user' and topic.enable_model:
         ai_patterns = [
             r'@\s*llm\b',
@@ -538,17 +542,27 @@ def create_message(topic_id):
             r'@assistant',
             r'@助手'
         ]
-        should_call_ai = any(re.search(pattern, content, re.IGNORECASE) for pattern in ai_patterns)
+        provider_for_message = find_provider_for_message(content)
+        should_call_ai = (
+            provider_for_message is not None or
+            any(re.search(pattern, content, re.IGNORECASE) for pattern in ai_patterns)
+        )
     
     # 只有@模型时才调用AI生成回复
     if should_call_ai:
         try:
-            assistant_content = generate_ai_response(topic_id, content, topic.model_name)
+            assistant_content = generate_ai_response(
+                topic_id,
+                content,
+                topic.model_name,
+                provider_override=provider_for_message
+            )
             if assistant_content:
                 assistant_message = Message(
                     topic_id=topic_id,
                     role='assistant',
-                    content=assistant_content
+                    content=assistant_content,
+                    user_id=None
                 )
                 db.session.add(assistant_message)
                 topic.updated_at = datetime.utcnow()
@@ -561,6 +575,7 @@ def create_message(topic_id):
         'id': message.id,
         'role': message.role,
         'content': message.content,
+        'username': resolve_message_username(message),
         'image_url': message.image_url,
         'created_at': message.created_at.isoformat()
     }), 201
@@ -604,15 +619,17 @@ def uploaded_file(filename):
     """提供上传的图片文件"""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-def generate_ai_response(topic_id, user_message, model_name=None):
+def generate_ai_response(topic_id, user_message, model_name=None, provider_override=None):
     """调用OpenAI API生成回复"""
     # 获取默认或指定的服务提供商配置
-    provider = ProviderConfig.query.filter_by(is_default=True).first()
+    provider = provider_override
     if not provider:
-        providers = ProviderConfig.query.all()
-        if not providers:
-            raise Exception("未配置服务提供商")
-        provider = providers[0]
+        provider = ProviderConfig.query.filter_by(is_default=True).first()
+        if not provider:
+            providers = ProviderConfig.query.all()
+            if not providers:
+                raise Exception("未配置服务提供商")
+            provider = providers[0]
     
     # 如果指定了模型名称，使用指定的模型，否则使用默认模型
     if not model_name:
@@ -650,6 +667,25 @@ def generate_ai_response(topic_id, user_message, model_name=None):
     )
     
     return response.choices[0].message.content
+
+def resolve_message_username(message):
+    if message.role == 'assistant':
+        return 'LLM'
+    if message.user:
+        return message.user.username
+    return current_user.username
+
+def find_provider_for_message(content):
+    if not content:
+        return None
+    providers = ProviderConfig.query.order_by(ProviderConfig.name.asc()).all()
+    if not providers:
+        return None
+    for provider in sorted(providers, key=lambda p: len(p.name), reverse=True):
+        pattern = rf'@\s*{re.escape(provider.name)}\b'
+        if re.search(pattern, content, re.IGNORECASE):
+            return provider
+    return None
 
 if __name__ == '__main__':
     with app.app_context():
@@ -726,6 +762,14 @@ if __name__ == '__main__':
                         db.session.execute(text('ALTER TABLE message ADD COLUMN image_url VARCHAR(500)'))
                     db.session.commit()
                     print("✓ 数据库已自动迁移：添加了 image_url 字段")
+
+                if 'user_id' not in message_columns:
+                    if 'sqlite' in str(db.engine.url):
+                        db.session.execute(text('ALTER TABLE message ADD COLUMN user_id INTEGER'))
+                    else:
+                        db.session.execute(text('ALTER TABLE message ADD COLUMN user_id INTEGER'))
+                    db.session.commit()
+                    print("✓ 数据库已自动迁移：添加了 user_id 字段")
                 
         except Exception as e:
             print(f"数据库迁移检查完成（如果这是首次运行，这是正常的）")
