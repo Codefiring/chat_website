@@ -376,12 +376,12 @@ body {
     }
 }
 
-.message.self {
+.message.user {
     align-self: flex-end;
     flex-direction: row-reverse;
 }
 
-.message.other {
+.message.assistant {
     align-self: flex-start;
 }
 
@@ -397,13 +397,13 @@ body {
     flex-shrink: 0;
 }
 
-.message.self .message-avatar {
+.message.user .message-avatar {
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border: 1px solid var(--border);
 }
 
-.message.other .message-avatar {
+.message.assistant .message-avatar {
     background: var(--bg-tertiary);
     color: var(--text-primary);
 }
@@ -418,7 +418,7 @@ body {
     line-height: 1.6;
 }
 
-.message.self .message-content {
+.message.user .message-content {
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border-color: var(--border);
@@ -802,3 +802,4 @@ body {
         flex: 1;
     }
 }
+
