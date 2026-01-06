@@ -2,6 +2,8 @@ let currentTopicId = null;
 let topics = [];
 let currentMessages = [];
 let allUsers = []; // 所有用户列表
+let messagePollInterval = null; // 消息轮询定时器
+let lastMessageCount = 0; // 上次消息数量，用于检测新消息
 
 // DOM 元素
 const topicsList = document.getElementById('topicsList');
@@ -63,6 +65,11 @@ document.addEventListener('DOMContentLoaded', () => {
     loadProviders();
     setupEventListeners();
     setupAutoResize();
+});
+
+// 页面卸载时停止轮询
+window.addEventListener('beforeunload', () => {
+    stopMessagePolling();
 });
 
 // 设置事件监听
@@ -249,6 +256,9 @@ function renderTopics() {
 
 // 选择话题
 async function selectTopic(topicId) {
+    // 停止之前的轮询
+    stopMessagePolling();
+    
     currentTopicId = topicId;
     const topic = topics.find(t => t.id === topicId);
     if (topic) {
@@ -266,23 +276,34 @@ async function selectTopic(topicId) {
     
     await loadMessages(topicId);
     renderTopics();
+    
+    // 启动消息轮询
+    startMessagePolling(topicId);
 }
 
 // 加载消息
-async function loadMessages(topicId) {
+async function loadMessages(topicId, preserveScroll = false) {
     try {
         const response = await fetch(`/api/topics/${topicId}/messages`);
         if (response.ok) {
             const messages = await response.json();
-            renderMessages(messages);
+            const hadNewMessages = messages.length > lastMessageCount;
+            lastMessageCount = messages.length;
+            renderMessages(messages, preserveScroll && !hadNewMessages);
+            return messages;
         }
     } catch (error) {
         console.error('加载消息失败:', error);
     }
+    return null;
 }
 
 // 渲染消息
-function renderMessages(messages) {
+function renderMessages(messages, preserveScroll = false) {
+    // 检查是否有新消息（通过比较消息ID）
+    const hadNewMessages = currentMessages.length > 0 && messages.length > currentMessages.length;
+    const wasAtBottom = isScrolledToBottom();
+    
     currentMessages = messages;
     chatMessages.innerHTML = '';
     
@@ -315,7 +336,19 @@ function renderMessages(messages) {
         chatMessages.appendChild(messageDiv);
     });
     
-    scrollToBottom();
+    // 只有在以下情况才自动滚动到底部：
+    // 1. 用户原本就在底部（wasAtBottom）
+    // 2. 有新消息（hadNewMessages）
+    // 3. 不要求保持滚动位置（!preserveScroll）
+    if (!preserveScroll || (wasAtBottom && hadNewMessages)) {
+        scrollToBottom();
+    }
+}
+
+// 检查是否滚动到底部
+function isScrolledToBottom() {
+    const threshold = 100; // 允许100px的误差
+    return chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < threshold;
 }
 
 // 加载用户列表
@@ -456,6 +489,7 @@ async function deleteTopic(topicId) {
         
         if (response.ok) {
             if (currentTopicId === topicId) {
+                stopMessagePolling();
                 currentTopicId = null;
                 chatMessages.innerHTML = '<div class="welcome-message"><p>👋 欢迎使用聊天网站</p><p>点击左侧"+"按钮创建新对话，或选择一个已有的话题</p></div>';
                 currentTopicTitle.textContent = '选择一个话题开始聊天';
@@ -805,9 +839,8 @@ async function sendImageMessage(imageUrl, textContent = '') {
             const savedMessage = await response.json();
             userMessage.id = savedMessage.id;
             
-            if (shouldCallLlm(textContent)) {
-                await loadMessages(currentTopicId);
-            }
+            // 重新加载消息以获取服务器返回的完整消息（包括可能的AI回复）
+            await loadMessages(currentTopicId);
         } else {
             const error = await response.json();
             alert(error.error || '发送消息失败');
@@ -869,9 +902,8 @@ async function handleSendMessage(e) {
             // 更新消息 ID
             userMessage.id = savedMessage.id;
             
-            if (shouldCallLlm(content)) {
-                await loadMessages(currentTopicId);
-            }
+            // 重新加载消息以获取服务器返回的完整消息（包括可能的AI回复）
+            await loadMessages(currentTopicId);
             await loadTopics(); // 更新话题列表（更新时间）
         }
     } catch (error) {
@@ -916,6 +948,35 @@ function shouldCallLlm(content) {
         });
     }
     return false;
+}
+
+// 启动消息轮询
+function startMessagePolling(topicId) {
+    // 清除之前的轮询
+    stopMessagePolling();
+    
+    if (!topicId) {
+        return;
+    }
+    
+    // 每2秒轮询一次新消息
+    messagePollInterval = setInterval(async () => {
+        if (currentTopicId === topicId) {
+            await loadMessages(topicId, true); // preserveScroll = true，保持滚动位置
+        } else {
+            // 如果话题已切换，停止轮询
+            stopMessagePolling();
+        }
+    }, 2000); // 2秒轮询一次
+}
+
+// 停止消息轮询
+function stopMessagePolling() {
+    if (messagePollInterval) {
+        clearInterval(messagePollInterval);
+        messagePollInterval = null;
+    }
+    lastMessageCount = 0;
 }
 
 // HTML 转义
