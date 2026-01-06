@@ -49,7 +49,7 @@ const providerName = document.getElementById('providerName');
 const providerApiKey = document.getElementById('providerApiKey');
 const providerBaseUrl = document.getElementById('providerBaseUrl');
 const providerIsDefault = document.getElementById('providerIsDefault');
-const testModelName = document.getElementById('testModelName');
+const providerModelName = document.getElementById('providerModelName');
 const testResult = document.getElementById('testResult');
 const testProviderBtn = document.getElementById('testProvider');
 const closeProviderModal = document.getElementById('closeProviderModal');
@@ -278,7 +278,13 @@ async function selectTopic(topicId) {
     // 所有有权限访问话题的用户都可以发送消息
     messageInput.disabled = false;
     sendBtn.disabled = false;
-    messageInput.placeholder = '输入消息...（使用@llm来调用AI）';
+    // 构建提示信息，显示可用的配置名称
+    let placeholderText = '输入消息...（使用@llm或@配置名称来调用AI）';
+    if (providers && providers.length > 0) {
+        const providerNames = providers.map(p => p.name).join('、');
+        placeholderText = `输入消息...（使用@llm或@${providerNames}来调用AI）`;
+    }
+    messageInput.placeholder = placeholderText;
     messageInput.focus();
     
     // 强制更新（首次加载）
@@ -646,6 +652,15 @@ async function loadProviders() {
         if (response.ok) {
             providers = await response.json();
             renderProviderList();
+            // 如果当前有选中的话题，更新输入框提示
+            if (currentTopicId && messageInput && !messageInput.disabled) {
+                let placeholderText = '输入消息...（使用@llm或@配置名称来调用AI）';
+                if (providers && providers.length > 0) {
+                    const providerNames = providers.map(p => p.name).join('、');
+                    placeholderText = `输入消息...（使用@llm或@${providerNames}来调用AI）`;
+                }
+                messageInput.placeholder = placeholderText;
+            }
         }
     } catch (error) {
         console.error('加载服务提供商失败:', error);
@@ -664,10 +679,11 @@ function renderProviderList() {
     providers.forEach(provider => {
         const item = document.createElement('div');
         item.className = 'provider-item';
+        const modelInfo = provider.model_name ? ` | 模型: ${escapeHtml(provider.model_name)}` : '';
         item.innerHTML = `
             <div class="provider-item-info">
                 <div class="provider-item-name">${escapeHtml(provider.name)} ${provider.is_default ? '(默认)' : ''}</div>
-                <div class="provider-item-details">类型: ${escapeHtml(provider.provider_type)} | URL: ${escapeHtml(provider.base_url || '默认')}</div>
+                <div class="provider-item-details">类型: ${escapeHtml(provider.provider_type)} | URL: ${escapeHtml(provider.base_url || '默认')}${modelInfo}</div>
             </div>
             <div class="provider-item-actions">
                 <button class="btn-icon" onclick="testProviderFromList(${provider.id}, event)" title="测试连接" style="color: #4CAF50;">
@@ -702,8 +718,8 @@ function showProviderConfigModal() {
     if (providerName) providerName.value = '';
     if (providerApiKey) providerApiKey.value = '';
     if (providerBaseUrl) providerBaseUrl.value = '';
+    if (providerModelName) providerModelName.value = '';
     if (providerIsDefault) providerIsDefault.checked = false;
-    if (testModelName) testModelName.value = 'gpt-3.5-turbo';
     if (testResult) {
         testResult.style.display = 'none';
         testResult.innerHTML = '';
@@ -718,8 +734,8 @@ function closeProviderConfigModal() {
     providerName.value = '';
     providerApiKey.value = '';
     providerBaseUrl.value = '';
+    if (providerModelName) providerModelName.value = '';
     providerIsDefault.checked = false;
-    if (testModelName) testModelName.value = 'gpt-3.5-turbo';
     if (testResult) {
         testResult.style.display = 'none';
         testResult.innerHTML = '';
@@ -733,8 +749,8 @@ function editProvider(providerId) {
         providerName.value = provider.name;
         providerApiKey.value = '***'; // 不显示真实密钥
         providerBaseUrl.value = provider.base_url || '';
+        if (providerModelName) providerModelName.value = provider.model_name || '';
         providerIsDefault.checked = provider.is_default;
-        if (testModelName) testModelName.value = 'gpt-3.5-turbo';
         if (testResult) {
             testResult.style.display = 'none';
             testResult.innerHTML = '';
@@ -766,7 +782,8 @@ async function deleteProvider(providerId) {
 async function testProviderConfig() {
     const apiKey = providerApiKey.value.trim();
     const baseUrl = providerBaseUrl.value.trim() || null;
-    const modelName = testModelName ? testModelName.value.trim() || 'gpt-3.5-turbo' : 'gpt-3.5-turbo';
+    // 使用配置的模型名称，如果没有则使用默认值
+    const modelName = providerModelName ? providerModelName.value.trim() || 'gpt-3.5-turbo' : 'gpt-3.5-turbo';
     
     if (!apiKey || apiKey === '***') {
         showTestResult('请先输入API密钥', false);
@@ -842,7 +859,8 @@ async function testProviderFromList(providerId, event) {
     }
     
     try {
-        const modelName = 'gpt-3.5-turbo'; // 默认模型
+        // 使用配置中保存的模型名称，如果没有则使用默认值
+        const modelName = provider.model_name || 'gpt-3.5-turbo';
         const response = await fetch('/api/providers/test', {
             method: 'POST',
             headers: {
@@ -897,6 +915,7 @@ async function saveProviderConfig() {
     const name = providerName.value.trim();
     const apiKey = providerApiKey.value.trim();
     const baseUrl = providerBaseUrl.value.trim() || null;
+    const modelName = providerModelName ? providerModelName.value.trim() || null : null;
     const isDefault = providerIsDefault.checked;
     
     if (!name) {
@@ -913,18 +932,33 @@ async function saveProviderConfig() {
         const url = editingProviderId ? `/api/providers/${editingProviderId}` : '/api/providers';
         const method = editingProviderId ? 'PUT' : 'POST';
         
+        const requestBody = {
+            name: name,
+            api_key: apiKey,
+            base_url: baseUrl,
+            provider_type: 'openai',
+            is_default: isDefault
+        };
+        
+        // 只有在编辑时如果API密钥是***，不发送api_key字段
+        if (editingProviderId && apiKey === '***') {
+            delete requestBody.api_key;
+        }
+        
+        // 添加模型名称
+        if (modelName) {
+            requestBody.model_name = modelName;
+        } else if (editingProviderId) {
+            // 编辑时，如果清空了模型名称，也需要发送null
+            requestBody.model_name = null;
+        }
+        
         const response = await fetch(url, {
             method: method,
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                name: name,
-                api_key: apiKey,
-                base_url: baseUrl,
-                provider_type: 'openai',
-                is_default: isDefault
-            })
+            body: JSON.stringify(requestBody)
         });
         
         if (response.ok) {

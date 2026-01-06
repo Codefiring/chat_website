@@ -289,6 +289,7 @@ def get_providers():
         'name': p.name,
         'provider_type': p.provider_type,
         'base_url': p.base_url,
+        'model_name': p.model_name,
         'is_default': p.is_default
     } for p in providers])
 
@@ -301,6 +302,7 @@ def create_provider():
     api_key = data.get('api_key', '').strip()
     base_url = data.get('base_url', '').strip() or None
     provider_type = data.get('provider_type', 'openai')
+    model_name = data.get('model_name', '').strip() or None
     is_default = data.get('is_default', False)
     
     if not name or not api_key:
@@ -319,6 +321,7 @@ def create_provider():
         provider_type=provider_type,
         api_key=api_key,
         base_url=base_url,
+        model_name=model_name,
         is_default=is_default
     )
     db.session.add(provider)
@@ -329,6 +332,7 @@ def create_provider():
         'name': provider.name,
         'provider_type': provider.provider_type,
         'base_url': provider.base_url,
+        'model_name': provider.model_name,
         'is_default': provider.is_default
     }), 201
 
@@ -354,6 +358,9 @@ def update_provider(provider_id):
     if 'base_url' in data:
         provider.base_url = data.get('base_url', '').strip() or None
     
+    if 'model_name' in data:
+        provider.model_name = data.get('model_name', '').strip() or None
+    
     if 'provider_type' in data:
         provider.provider_type = data.get('provider_type', 'openai')
     
@@ -371,6 +378,7 @@ def update_provider(provider_id):
         'name': provider.name,
         'provider_type': provider.provider_type,
         'base_url': provider.base_url,
+        'model_name': provider.model_name,
         'is_default': provider.is_default
     })
 
@@ -661,9 +669,10 @@ def create_message(topic_id):
     topic.updated_at = datetime.utcnow()
     db.session.commit()
     
-    # 检查是否@模型（消息中包含@llm或@模型等关键词）
+    # 检查是否@模型（消息中包含@llm或@模型等关键词，或@配置名称）
     should_call_ai = False
     provider_for_message = None
+    model_name_for_message = None
     if role == 'user' and topic.enable_model:
         ai_patterns = [
             r'@\s*llm\b',
@@ -678,14 +687,20 @@ def create_message(topic_id):
             provider_for_message is not None or
             any(re.search(pattern, content, re.IGNORECASE) for pattern in ai_patterns)
         )
+        
+        # 如果找到了指定的provider，使用其模型名称
+        if provider_for_message:
+            model_name_for_message = provider_for_message.model_name
     
     # 只有@模型时才调用AI生成回复
     if should_call_ai:
         try:
+            # 优先使用provider中的模型名称，其次使用topic中的模型名称
+            final_model_name = model_name_for_message or topic.model_name
             assistant_content = generate_ai_response(
                 topic_id,
                 content,
-                topic.model_name,
+                final_model_name,
                 provider_override=provider_for_message
             )
             if assistant_content:
@@ -800,9 +815,9 @@ def generate_ai_response(topic_id, user_message, model_name=None, provider_overr
                 raise Exception("未配置服务提供商")
             provider = providers[0]
     
-    # 如果指定了模型名称，使用指定的模型，否则使用默认模型
+    # 如果指定了模型名称，使用指定的模型，否则使用配置中的模型名称，最后使用默认模型
     if not model_name:
-        model_name = "gpt-3.5-turbo"  # 默认模型
+        model_name = provider.model_name or "gpt-3.5-turbo"  # 优先使用配置中的模型名称
     
     # 获取历史消息
     messages = Message.query.filter_by(topic_id=topic_id).order_by(Message.created_at.asc()).all()
@@ -900,6 +915,16 @@ if __name__ == '__main__':
             if 'provider_config' not in table_names:
                 db.create_all()
                 print("✓ 数据库已自动迁移：创建了 provider_config 表")
+            else:
+                # 检查并添加 provider_config 表的 model_name 字段
+                provider_columns = [col['name'] for col in inspector.get_columns('provider_config')]
+                if 'model_name' not in provider_columns:
+                    if 'sqlite' in str(db.engine.url):
+                        db.session.execute(text('ALTER TABLE provider_config ADD COLUMN model_name VARCHAR(100)'))
+                    else:
+                        db.session.execute(text('ALTER TABLE provider_config ADD COLUMN model_name VARCHAR(100)'))
+                    db.session.commit()
+                    print("✓ 数据库已自动迁移：添加了 provider_config.model_name 字段")
             
             # 检查并添加 user 表的 is_admin 字段
             if 'user' in table_names:

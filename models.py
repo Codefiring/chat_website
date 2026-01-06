@@ -40,6 +40,7 @@ class ProviderConfig(db.Model):
     provider_type = db.Column(db.String(50), nullable=False, default='openai')  # 提供商类型
     api_key = db.Column(db.String(500), nullable=False)  # API密钥
     base_url = db.Column(db.String(500), nullable=True)  # API基础URL（可选，用于自定义端点）
+    model_name = db.Column(db.String(100), nullable=True)  # 模型名称
     is_default = db.Column(db.Boolean, default=False, nullable=False)  # 是否为默认配置
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
