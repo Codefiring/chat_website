@@ -282,10 +282,11 @@ function renderMessages(messages) {
     
     messages.forEach(msg => {
         const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${msg.role}`;
+        const senderName = msg.username || (msg.role === 'assistant' ? 'LLM' : (window.currentUsername || 'U'));
+        const isSelf = senderName === (window.currentUsername || '');
+        messageDiv.className = `message ${isSelf ? 'self' : 'other'}`;
         
         // 获取头像文字：使用发送消息的用户名的前三个字符
-        const senderName = msg.username || (msg.role === 'assistant' ? 'LLM' : (window.currentUsername || 'U'));
         const avatarText = Array.from(senderName).slice(0, 3).join('').toUpperCase();
         
         let contentHtml = '';

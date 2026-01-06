@@ -558,13 +558,13 @@ def create_message(topic_id):
                 provider_override=provider_for_message
             )
             if assistant_content:
-                    assistant_message = Message(
-                        topic_id=topic_id,
-                        role='assistant',
-                        content=assistant_content,
-                        user_id=None
-                    )
-                    db.session.add(assistant_message)
+                assistant_message = Message(
+                    topic_id=topic_id,
+                    role='assistant',
+                    content=assistant_content,
+                    user_id=None
+                )
+                db.session.add(assistant_message)
                 topic.updated_at = datetime.utcnow()
                 db.session.commit()
         except Exception as e:
