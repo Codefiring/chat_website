@@ -11,6 +11,7 @@ const chatForm = document.getElementById('chatForm');
 const sendBtn = document.getElementById('sendBtn');
 const newChatBtn = document.getElementById('newChatBtn');
 const currentTopicTitle = document.getElementById('currentTopicTitle');
+const deleteCurrentTopicBtn = document.getElementById('deleteCurrentTopicBtn');
 const editTopicModal = document.getElementById('editTopicModal');
 const editTopicTitle = document.getElementById('editTopicTitle');
 const editTopicPublic = document.getElementById('editTopicPublic');
@@ -73,6 +74,13 @@ function setupEventListeners() {
     
     newChatBtn.addEventListener('click', showCreateTopicModal);
     chatForm.addEventListener('submit', handleSendMessage);
+    if (deleteCurrentTopicBtn) {
+        deleteCurrentTopicBtn.addEventListener('click', () => {
+            if (currentTopicId) {
+                deleteTopic(currentTopicId);
+            }
+        });
+    }
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -245,12 +253,15 @@ async function selectTopic(topicId) {
     const topic = topics.find(t => t.id === topicId);
     if (topic) {
         currentTopicTitle.textContent = topic.title;
+        if (deleteCurrentTopicBtn) {
+            deleteCurrentTopicBtn.style.display = topic.is_owner ? 'inline-flex' : 'none';
+        }
     }
     
     // 所有有权限访问话题的用户都可以发送消息
     messageInput.disabled = false;
     sendBtn.disabled = false;
-    messageInput.placeholder = '输入消息...（使用@模型来调用AI）';
+    messageInput.placeholder = '输入消息...（使用@llm来调用AI）';
     messageInput.focus();
     
     await loadMessages(topicId);
@@ -282,15 +293,12 @@ function renderMessages(messages) {
     
     messages.forEach(msg => {
         const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${msg.role}`;
+        const senderName = msg.username || (msg.role === 'assistant' ? 'LLM' : (window.currentUsername || 'U'));
+        const isSelf = senderName === (window.currentUsername || '');
+        messageDiv.className = `message ${isSelf ? 'self' : 'other'}`;
         
-        // 获取头像文字：用户消息显示当前用户名的首字母，助手消息显示'A'
-        let avatarText = 'A';
-        if (msg.role === 'user') {
-            // 使用当前用户名的首字母（大写）
-            const username = window.currentUsername || 'U';
-            avatarText = username.charAt(0).toUpperCase();
-        }
+        // 获取头像文字：使用发送消息的用户名的前三个字符
+        const avatarText = Array.from(senderName).slice(0, 3).join('').toUpperCase();
         
         let contentHtml = '';
         if (msg.image_url) {
@@ -454,6 +462,9 @@ async function deleteTopic(topicId) {
                 messageInput.disabled = true;
                 messageInput.placeholder = '输入消息...';
                 sendBtn.disabled = true;
+                if (deleteCurrentTopicBtn) {
+                    deleteCurrentTopicBtn.style.display = 'none';
+                }
             }
             await loadTopics();
         }
@@ -760,6 +771,7 @@ async function sendImageMessage(imageUrl, textContent = '') {
         id: Date.now(),
         role: 'user',
         content: textContent,
+        username: window.currentUsername || 'U',
         image_url: imageUrl,
         created_at: new Date().toISOString()
     };
@@ -787,17 +799,7 @@ async function sendImageMessage(imageUrl, textContent = '') {
             const savedMessage = await response.json();
             userMessage.id = savedMessage.id;
             
-            // 检查是否需要调用AI（如果消息包含@模型关键词）
-            const shouldCallAI = textContent && (
-                textContent.toLowerCase().includes('@模型') ||
-                textContent.toLowerCase().includes('@model') ||
-                textContent.toLowerCase().includes('@ai') ||
-                textContent.toLowerCase().includes('@assistant') ||
-                textContent.toLowerCase().includes('@助手')
-            );
-            
-            if (shouldCallAI) {
-                // AI回复逻辑会在后端处理
+            if (shouldCallLlm(textContent)) {
                 await loadMessages(currentTopicId);
             }
         } else {
@@ -834,6 +836,7 @@ async function handleSendMessage(e) {
         id: Date.now(),
         role: 'user',
         content: content,
+        username: window.currentUsername || 'U',
         created_at: new Date().toISOString()
     };
     
@@ -860,38 +863,9 @@ async function handleSendMessage(e) {
             // 更新消息 ID
             userMessage.id = savedMessage.id;
             
-            // 模拟助手回复（实际应用中应该调用 AI API）
-            setTimeout(async () => {
-                const assistantResponse = generateAssistantResponse(content);
-                
-                const assistantMessage = {
-                    id: Date.now() + 1,
-                    role: 'assistant',
-                    content: assistantResponse,
-                    created_at: new Date().toISOString()
-                };
-                
-                currentMessages.push(assistantMessage);
-                renderMessages([...currentMessages]);
-                
-                // 保存助手消息
-                const assistantResponse_fetch = await fetch(`/api/topics/${currentTopicId}/messages`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        role: 'assistant',
-                        content: assistantResponse
-                    })
-                });
-                
-                if (assistantResponse_fetch.ok) {
-                    const savedAssistantMessage = await assistantResponse_fetch.json();
-                    assistantMessage.id = savedAssistantMessage.id;
-                }
-            }, 500);
-            
+            if (shouldCallLlm(content)) {
+                await loadMessages(currentTopicId);
+            }
             await loadTopics(); // 更新话题列表（更新时间）
         }
     } catch (error) {
@@ -910,10 +884,37 @@ function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
+function shouldCallLlm(content) {
+    if (!content) {
+        return false;
+    }
+    const patterns = [
+        /@\s*llm\b/i,
+        /@模型/i,
+        /@model/i,
+        /@ai/i,
+        /@assistant/i,
+        /@助手/i
+    ];
+    if (patterns.some(pattern => pattern.test(content))) {
+        return true;
+    }
+    if (providers && providers.length > 0) {
+        return providers.some(provider => {
+            if (!provider || !provider.name) {
+                return false;
+            }
+            const escapedName = provider.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = new RegExp(`@\\s*${escapedName}\\b`, 'i');
+            return pattern.test(content);
+        });
+    }
+    return false;
+}
+
 // HTML 转义
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
-
