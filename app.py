@@ -4,6 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from models import db, User, ChatTopic, Message, ProviderConfig
 from datetime import datetime
+import re
 import os
 from openai import OpenAI
 import base64
@@ -526,34 +527,32 @@ def create_message(topic_id):
     topic.updated_at = datetime.utcnow()
     db.session.commit()
     
-    # 检查是否@模型（消息中包含@模型或@model等关键词）
+    # 检查是否@模型（消息中包含@llm或@模型等关键词）
     should_call_ai = False
     if role == 'user' and topic.enable_model:
-        # 检查消息中是否包含@模型相关的关键词
-        content_lower = content.lower()
-        ai_keywords = ['@模型', '@model', '@ai', '@assistant', '@助手']
-        should_call_ai = any(keyword in content_lower for keyword in ai_keywords)
+        ai_patterns = [
+            r'@\s*llm\b',
+            r'@模型',
+            r'@model',
+            r'@ai',
+            r'@assistant',
+            r'@助手'
+        ]
+        should_call_ai = any(re.search(pattern, content, re.IGNORECASE) for pattern in ai_patterns)
     
     # 只有@模型时才调用AI生成回复
     if should_call_ai:
         try:
-            # 移除@关键词，只保留实际内容
-            clean_content = content
-            for keyword in ai_keywords:
-                clean_content = clean_content.replace(keyword, '').replace(keyword.upper(), '').replace(keyword.capitalize(), '')
-            clean_content = clean_content.strip()
-            
-            if clean_content:
-                assistant_content = generate_ai_response(topic_id, clean_content, topic.model_name)
-                if assistant_content:
-                    assistant_message = Message(
-                        topic_id=topic_id,
-                        role='assistant',
-                        content=assistant_content
-                    )
-                    db.session.add(assistant_message)
-                    topic.updated_at = datetime.utcnow()
-                    db.session.commit()
+            assistant_content = generate_ai_response(topic_id, content, topic.model_name)
+            if assistant_content:
+                assistant_message = Message(
+                    topic_id=topic_id,
+                    role='assistant',
+                    content=assistant_content
+                )
+                db.session.add(assistant_message)
+                topic.updated_at = datetime.utcnow()
+                db.session.commit()
         except Exception as e:
             print(f"AI回复生成失败: {e}")
             # 即使AI失败，用户消息也已经保存
@@ -733,4 +732,3 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
     app.run(debug=True, host='0.0.0.0', port=5000)
-
