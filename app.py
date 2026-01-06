@@ -77,6 +77,32 @@ def user_can_access_topic(topic):
         current_user.id in [user.id for user in topic.allowed_users]
     )
 
+def create_openai_client(api_key, base_url=None):
+    """创建OpenAI客户端，处理代理环境变量问题
+    
+    临时移除代理环境变量，避免传递给客户端导致版本兼容性问题
+    """
+    client_kwargs = {
+        'api_key': api_key
+    }
+    if base_url:
+        client_kwargs['base_url'] = base_url
+    
+    # 临时移除代理环境变量，避免传递给客户端
+    env_backup = {}
+    proxy_keys = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+    for key in proxy_keys:
+        if key in os.environ:
+            env_backup[key] = os.environ.pop(key)
+    
+    try:
+        client = OpenAI(**client_kwargs)
+        return client
+    finally:
+        # 恢复环境变量
+        for key, value in env_backup.items():
+            os.environ[key] = value
+
 @app.route('/')
 def index():
     if current_user.is_authenticated:
@@ -384,14 +410,8 @@ def test_provider():
         return jsonify({'error': 'API密钥不能为空'}), 400
     
     try:
-        # 创建OpenAI客户端
-        client_kwargs = {
-            'api_key': api_key
-        }
-        if base_url:
-            client_kwargs['base_url'] = base_url
-        
-        client = OpenAI(**client_kwargs)
+        # 创建OpenAI客户端（使用辅助函数处理代理问题）
+        client = create_openai_client(api_key, base_url)
         
         # 发送测试消息
         test_messages = [
@@ -798,14 +818,8 @@ def generate_ai_response(topic_id, user_message, model_name=None, provider_overr
             'content': msg.content
         })
     
-    # 创建OpenAI客户端
-    client_kwargs = {
-        'api_key': provider.api_key
-    }
-    if provider.base_url:
-        client_kwargs['base_url'] = provider.base_url
-    
-    client = OpenAI(**client_kwargs)
+    # 创建OpenAI客户端（使用辅助函数处理代理问题）
+    client = create_openai_client(provider.api_key, provider.base_url)
     
     # 调用API
     response = client.chat.completions.create(
