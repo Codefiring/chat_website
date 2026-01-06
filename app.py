@@ -1,23 +1,27 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
 from models import db, User, ChatTopic, Message, ProviderConfig
 from datetime import datetime
 import os
 from openai import OpenAI
 import base64
 import uuid
+import io
+import mimetypes
+from cryptography.fernet import Fernet, InvalidToken
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-change-this-in-production'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['UPLOAD_FOLDER'] = 'protected_uploads'
+app.config['ENCRYPTION_KEY_FILE'] = os.path.join('instance', 'image_encryption.key')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # 确保上传目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(os.path.dirname(app.config['ENCRYPTION_KEY_FILE']), exist_ok=True)
 
 db.init_app(app)
 
@@ -29,6 +33,48 @@ login_manager.login_message = '请先登录以访问此页面。'
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+def get_image_encryption_key():
+    env_key = os.getenv('IMAGE_ENCRYPTION_KEY')
+    if env_key:
+        return env_key.encode('utf-8')
+
+    key_path = app.config['ENCRYPTION_KEY_FILE']
+    if os.path.exists(key_path):
+        with open(key_path, 'rb') as key_file:
+            return key_file.read()
+
+    key = Fernet.generate_key()
+    with open(key_path, 'wb') as key_file:
+        key_file.write(key)
+    os.chmod(key_path, 0o600)
+    return key
+
+def encrypt_image_bytes(image_bytes):
+    fernet = Fernet(get_image_encryption_key())
+    return fernet.encrypt(image_bytes)
+
+def decrypt_image_bytes(encrypted_bytes):
+    fernet = Fernet(get_image_encryption_key())
+    return fernet.decrypt(encrypted_bytes)
+
+def guess_extension_from_header(header):
+    if not header:
+        return '.png'
+    mime_type = header.split(';')[0].split(':')[-1]
+    if not mime_type.startswith('image/'):
+        return '.png'
+    extension = mimetypes.guess_extension(mime_type) or '.png'
+    if extension == '.jpe':
+        extension = '.jpg'
+    return extension
+
+def user_can_access_topic(topic):
+    return (
+        topic.is_public or
+        topic.user_id == current_user.id or
+        current_user.id in [user.id for user in topic.allowed_users]
+    )
 
 @app.route('/')
 def index():
@@ -473,11 +519,7 @@ def get_messages(topic_id):
     
     # 允许查看公开话题、自己的话题、或有权限访问的话题
     from models import topic_permissions
-    has_permission = (
-        topic.is_public or 
-        topic.user_id == current_user.id or
-        current_user.id in [user.id for user in topic.allowed_users]
-    )
+    has_permission = user_can_access_topic(topic)
     
     if not has_permission:
         return jsonify({'error': '无权访问'}), 403
@@ -497,11 +539,7 @@ def create_message(topic_id):
     
     # 检查用户是否有权限访问此话题
     from models import topic_permissions
-    has_permission = (
-        topic.is_public or 
-        topic.user_id == current_user.id or
-        current_user.id in [user.id for user in topic.allowed_users]
-    )
+    has_permission = user_can_access_topic(topic)
     
     if not has_permission:
         return jsonify({'error': '无权访问此话题'}), 403
@@ -573,11 +611,20 @@ def upload_image():
     try:
         data = request.get_json()
         image_data = data.get('image_data', '')  # base64编码的图片数据
+        topic_id = data.get('topic_id')
         
+        if not topic_id:
+            return jsonify({'error': '必须选择一个话题后上传图片'}), 400
+
+        topic = ChatTopic.query.get_or_404(topic_id)
+        if not user_can_access_topic(topic):
+            return jsonify({'error': '无权上传到此话题'}), 403
+
         if not image_data:
             return jsonify({'error': '图片数据不能为空'}), 400
         
         # 解析base64数据
+        header = None
         if ',' in image_data:
             header, image_data = image_data.split(',', 1)
         
@@ -585,25 +632,54 @@ def upload_image():
         image_bytes = base64.b64decode(image_data)
         
         # 生成文件名
-        filename = f"{uuid.uuid4().hex}.png"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        extension = guess_extension_from_header(header)
+        filename = f"{uuid.uuid4().hex}{extension}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{filename}.enc")
+
+        encrypted_bytes = encrypt_image_bytes(image_bytes)
         
         # 保存文件
         with open(filepath, 'wb') as f:
-            f.write(image_bytes)
+            f.write(encrypted_bytes)
         
         # 返回图片URL
-        image_url = f"/static/uploads/{filename}"
+        image_url = f"/media/{filename}"
         return jsonify({'image_url': image_url}), 200
         
     except Exception as e:
         print(f"图片上传失败: {e}")
         return jsonify({'error': '图片上传失败'}), 500
 
-@app.route('/static/uploads/<filename>')
+@app.route('/media/<filename>')
+@login_required
 def uploaded_file(filename):
-    """提供上传的图片文件"""
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    """提供上传的图片文件（需要权限校验）"""
+    image_url = f"/media/{filename}"
+    message = Message.query.filter_by(image_url=image_url).first()
+    if not message:
+        return jsonify({'error': '图片不存在'}), 404
+
+    topic = ChatTopic.query.get_or_404(message.topic_id)
+    if not user_can_access_topic(topic):
+        return jsonify({'error': '无权访问此图片'}), 403
+
+    encrypted_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{filename}.enc")
+    if not os.path.exists(encrypted_path):
+        return jsonify({'error': '图片不存在'}), 404
+
+    try:
+        with open(encrypted_path, 'rb') as encrypted_file:
+            encrypted_bytes = encrypted_file.read()
+        image_bytes = decrypt_image_bytes(encrypted_bytes)
+    except InvalidToken:
+        return jsonify({'error': '图片解密失败'}), 500
+
+    mime_type, _ = mimetypes.guess_type(filename)
+    return send_file(
+        io.BytesIO(image_bytes),
+        mimetype=mime_type or 'application/octet-stream',
+        download_name=filename
+    )
 
 def generate_ai_response(topic_id, user_message, model_name=None):
     """调用OpenAI API生成回复"""
@@ -733,4 +809,3 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
     app.run(debug=True, host='0.0.0.0', port=5000)
-
