@@ -250,7 +250,7 @@ async function selectTopic(topicId) {
     // 所有有权限访问话题的用户都可以发送消息
     messageInput.disabled = false;
     sendBtn.disabled = false;
-    messageInput.placeholder = '输入消息...（使用@模型来调用AI）';
+    messageInput.placeholder = '输入消息...（使用@llm来调用AI）';
     messageInput.focus();
     
     await loadMessages(topicId);
@@ -284,12 +284,11 @@ function renderMessages(messages) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${msg.role}`;
         
-        // 获取头像文字：用户消息显示当前用户名的首字母，助手消息显示'A'
+        // 获取头像文字：用户消息显示当前用户名前三个字符，助手消息显示'A'
         let avatarText = 'A';
         if (msg.role === 'user') {
-            // 使用当前用户名的首字母（大写）
             const username = window.currentUsername || 'U';
-            avatarText = username.charAt(0).toUpperCase();
+            avatarText = Array.from(username).slice(0, 3).join('').toUpperCase();
         }
         
         let contentHtml = '';
@@ -787,17 +786,7 @@ async function sendImageMessage(imageUrl, textContent = '') {
             const savedMessage = await response.json();
             userMessage.id = savedMessage.id;
             
-            // 检查是否需要调用AI（如果消息包含@模型关键词）
-            const shouldCallAI = textContent && (
-                textContent.toLowerCase().includes('@模型') ||
-                textContent.toLowerCase().includes('@model') ||
-                textContent.toLowerCase().includes('@ai') ||
-                textContent.toLowerCase().includes('@assistant') ||
-                textContent.toLowerCase().includes('@助手')
-            );
-            
-            if (shouldCallAI) {
-                // AI回复逻辑会在后端处理
+            if (shouldCallLlm(textContent)) {
                 await loadMessages(currentTopicId);
             }
         } else {
@@ -860,38 +849,9 @@ async function handleSendMessage(e) {
             // 更新消息 ID
             userMessage.id = savedMessage.id;
             
-            // 模拟助手回复（实际应用中应该调用 AI API）
-            setTimeout(async () => {
-                const assistantResponse = generateAssistantResponse(content);
-                
-                const assistantMessage = {
-                    id: Date.now() + 1,
-                    role: 'assistant',
-                    content: assistantResponse,
-                    created_at: new Date().toISOString()
-                };
-                
-                currentMessages.push(assistantMessage);
-                renderMessages([...currentMessages]);
-                
-                // 保存助手消息
-                const assistantResponse_fetch = await fetch(`/api/topics/${currentTopicId}/messages`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        role: 'assistant',
-                        content: assistantResponse
-                    })
-                });
-                
-                if (assistantResponse_fetch.ok) {
-                    const savedAssistantMessage = await assistantResponse_fetch.json();
-                    assistantMessage.id = savedAssistantMessage.id;
-                }
-            }, 500);
-            
+            if (shouldCallLlm(content)) {
+                await loadMessages(currentTopicId);
+            }
             await loadTopics(); // 更新话题列表（更新时间）
         }
     } catch (error) {
@@ -910,10 +870,24 @@ function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
+function shouldCallLlm(content) {
+    if (!content) {
+        return false;
+    }
+    const patterns = [
+        /@\s*llm\b/i,
+        /@模型/i,
+        /@model/i,
+        /@ai/i,
+        /@assistant/i,
+        /@助手/i
+    ];
+    return patterns.some(pattern => pattern.test(content));
+}
+
 // HTML 转义
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
-
