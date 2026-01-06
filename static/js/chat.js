@@ -702,10 +702,15 @@ async function saveProviderConfig() {
 // 处理图片粘贴
 async function handlePasteImage(e) {
     const items = e.clipboardData.items;
-    
+
     for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') !== -1) {
             e.preventDefault();
+
+            if (!currentTopicId) {
+                alert('请先选择一个话题');
+                return;
+            }
             
             const file = items[i].getAsFile();
             if (!file) return;
@@ -729,7 +734,8 @@ async function handlePasteImage(e) {
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            image_data: imageData
+                            image_data: imageData,
+                            topic_id: currentTopicId
                         })
                     });
                     
