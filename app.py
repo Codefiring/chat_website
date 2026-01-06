@@ -357,6 +357,79 @@ def delete_provider(provider_id):
     db.session.commit()
     return jsonify({'success': True})
 
+@app.route('/api/providers/test', methods=['POST'])
+@login_required
+def test_provider():
+    """测试服务提供商配置"""
+    data = request.get_json()
+    provider_id = data.get('provider_id')
+    
+    # 如果提供了provider_id，使用已保存的配置
+    if provider_id:
+        provider = ProviderConfig.query.get(provider_id)
+        if not provider:
+            return jsonify({'error': '配置不存在'}), 404
+        api_key = provider.api_key
+        base_url = provider.base_url
+        provider_type = provider.provider_type
+    else:
+        # 否则使用提供的参数
+        api_key = data.get('api_key', '').strip()
+        base_url = data.get('base_url', '').strip() or None
+        provider_type = data.get('provider_type', 'openai')
+    
+    model_name = data.get('model_name', 'gpt-3.5-turbo')
+    
+    if not api_key:
+        return jsonify({'error': 'API密钥不能为空'}), 400
+    
+    try:
+        # 创建OpenAI客户端
+        client_kwargs = {
+            'api_key': api_key
+        }
+        if base_url:
+            client_kwargs['base_url'] = base_url
+        
+        client = OpenAI(**client_kwargs)
+        
+        # 发送测试消息
+        test_messages = [
+            {'role': 'user', 'content': '你好，请回复"测试成功"'}
+        ]
+        
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=test_messages,
+            temperature=0.7,
+            max_tokens=100
+        )
+        
+        reply = response.choices[0].message.content
+        
+        return jsonify({
+            'success': True,
+            'message': '测试成功',
+            'reply': reply,
+            'model': model_name
+        })
+    except Exception as e:
+        error_message = str(e)
+        # 提取更友好的错误信息
+        if 'api_key' in error_message.lower() or 'authentication' in error_message.lower():
+            error_message = 'API密钥无效或已过期'
+        elif 'model' in error_message.lower() and 'not found' in error_message.lower():
+            error_message = f'模型 {model_name} 不存在或不可用'
+        elif 'rate limit' in error_message.lower():
+            error_message = '请求频率超限，请稍后再试'
+        elif 'network' in error_message.lower() or 'connection' in error_message.lower():
+            error_message = '网络连接失败，请检查网络或API地址'
+        
+        return jsonify({
+            'success': False,
+            'error': error_message
+        }), 400
+
 @app.route('/api/topics', methods=['GET'])
 @login_required
 def get_topics():

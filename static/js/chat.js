@@ -3,7 +3,7 @@ let topics = [];
 let currentMessages = [];
 let allUsers = []; // 所有用户列表
 let messagePollInterval = null; // 消息轮询定时器
-let lastMessageCount = 0; // 上次消息数量，用于检测新消息
+let lastMessageId = null; // 最后一条消息的ID，用于检测新消息
 
 // DOM 元素
 const topicsList = document.getElementById('topicsList');
@@ -49,6 +49,9 @@ const providerName = document.getElementById('providerName');
 const providerApiKey = document.getElementById('providerApiKey');
 const providerBaseUrl = document.getElementById('providerBaseUrl');
 const providerIsDefault = document.getElementById('providerIsDefault');
+const testModelName = document.getElementById('testModelName');
+const testResult = document.getElementById('testResult');
+const testProviderBtn = document.getElementById('testProvider');
 const closeProviderModal = document.getElementById('closeProviderModal');
 const cancelProvider = document.getElementById('cancelProvider');
 const saveProvider = document.getElementById('saveProvider');
@@ -160,6 +163,10 @@ function setupEventListeners() {
     }
     if (saveProvider) {
         saveProvider.addEventListener('click', saveProviderConfig);
+    }
+    
+    if (testProviderBtn) {
+        testProviderBtn.addEventListener('click', testProviderConfig);
     }
     
     if (providerConfigModal) {
@@ -274,7 +281,8 @@ async function selectTopic(topicId) {
     messageInput.placeholder = '输入消息...（使用@llm来调用AI）';
     messageInput.focus();
     
-    await loadMessages(topicId);
+    // 强制更新（首次加载）
+    await loadMessages(topicId, false, true);
     renderTopics();
     
     // 启动消息轮询
@@ -282,14 +290,22 @@ async function selectTopic(topicId) {
 }
 
 // 加载消息
-async function loadMessages(topicId, preserveScroll = false) {
+async function loadMessages(topicId, preserveScroll = false, forceUpdate = false) {
     try {
         const response = await fetch(`/api/topics/${topicId}/messages`);
         if (response.ok) {
             const messages = await response.json();
-            const hadNewMessages = messages.length > lastMessageCount;
-            lastMessageCount = messages.length;
-            renderMessages(messages, preserveScroll && !hadNewMessages);
+            
+            // 检测是否有新消息：比较最后一条消息的ID
+            const latestMessageId = messages.length > 0 ? messages[messages.length - 1].id : null;
+            const hasNewMessages = forceUpdate || (latestMessageId !== null && latestMessageId !== lastMessageId);
+            
+            // 只有在有新消息时才更新DOM
+            if (hasNewMessages) {
+                lastMessageId = latestMessageId;
+                renderMessages(messages, preserveScroll);
+            }
+            
             return messages;
         }
     } catch (error) {
@@ -304,6 +320,41 @@ function renderMessages(messages, preserveScroll = false) {
     const hadNewMessages = currentMessages.length > 0 && messages.length > currentMessages.length;
     const wasAtBottom = isScrolledToBottom();
     
+    // 如果消息数量相同且ID都匹配，说明没有新消息，不需要更新DOM
+    if (currentMessages.length === messages.length && currentMessages.length > 0) {
+        const currentLastId = currentMessages[currentMessages.length - 1].id;
+        const newLastId = messages[messages.length - 1].id;
+        if (currentLastId === newLastId) {
+            // 没有新消息，不需要更新
+            return;
+        }
+    }
+    
+    // 如果只是新增了消息，可以增量添加而不是重建整个DOM
+    if (hadNewMessages && currentMessages.length > 0) {
+        // 找到新增的消息
+        const existingIds = new Set(currentMessages.map(m => m.id));
+        const newMessages = messages.filter(m => !existingIds.has(m.id));
+        
+        if (newMessages.length > 0) {
+            // 只添加新消息
+            newMessages.forEach(msg => {
+                const messageDiv = createMessageElement(msg);
+                chatMessages.appendChild(messageDiv);
+            });
+            
+            // 更新当前消息列表
+            currentMessages = messages;
+            
+            // 如果用户在底部，自动滚动
+            if (wasAtBottom) {
+                scrollToBottom();
+            }
+            return;
+        }
+    }
+    
+    // 需要完全重建DOM（首次加载、消息被删除等情况）
     currentMessages = messages;
     chatMessages.innerHTML = '';
     
@@ -313,26 +364,7 @@ function renderMessages(messages, preserveScroll = false) {
     }
     
     messages.forEach(msg => {
-        const messageDiv = document.createElement('div');
-        const senderName = msg.username || (msg.role === 'assistant' ? 'LLM' : (window.currentUsername || 'U'));
-        const isSelf = senderName === (window.currentUsername || '');
-        messageDiv.className = `message ${isSelf ? 'self' : 'other'}`;
-        
-        // 获取头像文字：使用发送消息的用户名的前三个字符
-        const avatarText = Array.from(senderName).slice(0, 3).join('').toUpperCase();
-        
-        let contentHtml = '';
-        if (msg.image_url) {
-            contentHtml += `<div class="message-image"><img src="${escapeHtml(msg.image_url)}" alt="图片" style="max-width: 100%; max-height: 400px; border-radius: 8px; cursor: pointer;" onclick="window.open('${escapeHtml(msg.image_url)}', '_blank')"></div>`;
-        }
-        if (msg.content) {
-            contentHtml += `<div class="message-text">${escapeHtml(msg.content)}</div>`;
-        }
-        
-        messageDiv.innerHTML = `
-            <div class="message-avatar">${avatarText}</div>
-            <div class="message-content">${contentHtml}</div>
-        `;
+        const messageDiv = createMessageElement(msg);
         chatMessages.appendChild(messageDiv);
     });
     
@@ -343,6 +375,31 @@ function renderMessages(messages, preserveScroll = false) {
     if (!preserveScroll || (wasAtBottom && hadNewMessages)) {
         scrollToBottom();
     }
+}
+
+// 创建消息元素
+function createMessageElement(msg) {
+    const messageDiv = document.createElement('div');
+    const senderName = msg.username || (msg.role === 'assistant' ? 'LLM' : (window.currentUsername || 'U'));
+    const isSelf = senderName === (window.currentUsername || '');
+    messageDiv.className = `message ${isSelf ? 'self' : 'other'}`;
+    
+    // 获取头像文字：使用发送消息的用户名的前三个字符
+    const avatarText = Array.from(senderName).slice(0, 3).join('').toUpperCase();
+    
+    let contentHtml = '';
+    if (msg.image_url) {
+        contentHtml += `<div class="message-image"><img src="${escapeHtml(msg.image_url)}" alt="图片" style="max-width: 100%; max-height: 400px; border-radius: 8px; cursor: pointer;" onclick="window.open('${escapeHtml(msg.image_url)}', '_blank')"></div>`;
+    }
+    if (msg.content) {
+        contentHtml += `<div class="message-text">${escapeHtml(msg.content)}</div>`;
+    }
+    
+    messageDiv.innerHTML = `
+        <div class="message-avatar">${avatarText}</div>
+        <div class="message-content">${contentHtml}</div>
+    `;
+    return messageDiv;
 }
 
 // 检查是否滚动到底部
@@ -613,6 +670,11 @@ function renderProviderList() {
                 <div class="provider-item-details">类型: ${escapeHtml(provider.provider_type)} | URL: ${escapeHtml(provider.base_url || '默认')}</div>
             </div>
             <div class="provider-item-actions">
+                <button class="btn-icon" onclick="testProviderFromList(${provider.id}, event)" title="测试连接" style="color: #4CAF50;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                </button>
                 <button class="btn-icon" onclick="editProvider(${provider.id})" title="编辑">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -641,6 +703,11 @@ function showProviderConfigModal() {
     if (providerApiKey) providerApiKey.value = '';
     if (providerBaseUrl) providerBaseUrl.value = '';
     if (providerIsDefault) providerIsDefault.checked = false;
+    if (testModelName) testModelName.value = 'gpt-3.5-turbo';
+    if (testResult) {
+        testResult.style.display = 'none';
+        testResult.innerHTML = '';
+    }
     loadProviders();
     providerConfigModal.classList.add('show');
 }
@@ -652,6 +719,11 @@ function closeProviderConfigModal() {
     providerApiKey.value = '';
     providerBaseUrl.value = '';
     providerIsDefault.checked = false;
+    if (testModelName) testModelName.value = 'gpt-3.5-turbo';
+    if (testResult) {
+        testResult.style.display = 'none';
+        testResult.innerHTML = '';
+    }
 }
 
 function editProvider(providerId) {
@@ -662,6 +734,11 @@ function editProvider(providerId) {
         providerApiKey.value = '***'; // 不显示真实密钥
         providerBaseUrl.value = provider.base_url || '';
         providerIsDefault.checked = provider.is_default;
+        if (testModelName) testModelName.value = 'gpt-3.5-turbo';
+        if (testResult) {
+            testResult.style.display = 'none';
+            testResult.innerHTML = '';
+        }
         providerConfigModal.classList.add('show');
     }
 }
@@ -683,6 +760,137 @@ async function deleteProvider(providerId) {
         console.error('删除配置失败:', error);
         alert('删除配置失败，请重试');
     }
+}
+
+// 测试服务提供商配置
+async function testProviderConfig() {
+    const apiKey = providerApiKey.value.trim();
+    const baseUrl = providerBaseUrl.value.trim() || null;
+    const modelName = testModelName ? testModelName.value.trim() || 'gpt-3.5-turbo' : 'gpt-3.5-turbo';
+    
+    if (!apiKey || apiKey === '***') {
+        showTestResult('请先输入API密钥', false);
+        return;
+    }
+    
+    // 显示测试中状态
+    if (testResult) {
+        testResult.style.display = 'block';
+        testResult.style.backgroundColor = '#fff3cd';
+        testResult.style.color = '#856404';
+        testResult.style.border = '1px solid #ffc107';
+        testResult.innerHTML = '🔄 正在测试连接...';
+    }
+    
+    // 禁用测试按钮
+    if (testProviderBtn) {
+        testProviderBtn.disabled = true;
+        testProviderBtn.textContent = '测试中...';
+    }
+    
+    try {
+        const response = await fetch('/api/providers/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                api_key: apiKey,
+                base_url: baseUrl,
+                provider_type: 'openai',
+                model_name: modelName
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok && result.success) {
+            showTestResult(`✅ 测试成功！\n模型: ${result.model}\n回复: ${result.reply}`, true);
+        } else {
+            showTestResult(`❌ 测试失败: ${result.error || '未知错误'}`, false);
+        }
+    } catch (error) {
+        console.error('测试失败:', error);
+        showTestResult(`❌ 测试失败: 网络错误，请检查网络连接`, false);
+    } finally {
+        // 恢复测试按钮
+        if (testProviderBtn) {
+            testProviderBtn.disabled = false;
+            testProviderBtn.textContent = '测试连接';
+        }
+    }
+}
+
+// 从列表测试服务提供商（使用已保存的配置）
+async function testProviderFromList(providerId, event) {
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) {
+        alert('找不到该配置');
+        return;
+    }
+    
+    // 显示测试中提示
+    let testBtn = null;
+    let originalText = '';
+    if (event && event.target) {
+        testBtn = event.target.closest('button');
+        if (testBtn) {
+            originalText = testBtn.innerHTML;
+            testBtn.disabled = true;
+            testBtn.innerHTML = '测试中...';
+        }
+    }
+    
+    try {
+        const modelName = 'gpt-3.5-turbo'; // 默认模型
+        const response = await fetch('/api/providers/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                provider_id: providerId,
+                model_name: modelName
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok && result.success) {
+            alert(`✅ 测试成功！\n\n模型: ${result.model}\n回复: ${result.reply}`);
+        } else {
+            alert(`❌ 测试失败: ${result.error || '未知错误'}`);
+        }
+    } catch (error) {
+        console.error('测试失败:', error);
+        alert('❌ 测试失败: 网络错误，请检查网络连接');
+    } finally {
+        if (testBtn) {
+            testBtn.disabled = false;
+            testBtn.innerHTML = originalText;
+        }
+    }
+}
+
+// 显示测试结果
+function showTestResult(message, success) {
+    if (!testResult) return;
+    
+    testResult.style.display = 'block';
+    testResult.style.whiteSpace = 'pre-line';
+    testResult.style.lineHeight = '1.6';
+    
+    if (success) {
+        testResult.style.backgroundColor = '#d4edda';
+        testResult.style.color = '#155724';
+        testResult.style.border = '1px solid #c3e6cb';
+    } else {
+        testResult.style.backgroundColor = '#f8d7da';
+        testResult.style.color = '#721c24';
+        testResult.style.border = '1px solid #f5c6cb';
+    }
+    
+    testResult.innerHTML = message;
 }
 
 async function saveProviderConfig() {
@@ -839,8 +1047,12 @@ async function sendImageMessage(imageUrl, textContent = '') {
             const savedMessage = await response.json();
             userMessage.id = savedMessage.id;
             
+            // 更新最后一条消息ID
+            lastMessageId = savedMessage.id;
+            
             // 重新加载消息以获取服务器返回的完整消息（包括可能的AI回复）
-            await loadMessages(currentTopicId);
+            // forceUpdate = true，因为这是用户刚发送的消息，需要立即显示
+            await loadMessages(currentTopicId, false, true);
         } else {
             const error = await response.json();
             alert(error.error || '发送消息失败');
@@ -902,8 +1114,12 @@ async function handleSendMessage(e) {
             // 更新消息 ID
             userMessage.id = savedMessage.id;
             
+            // 更新最后一条消息ID
+            lastMessageId = savedMessage.id;
+            
             // 重新加载消息以获取服务器返回的完整消息（包括可能的AI回复）
-            await loadMessages(currentTopicId);
+            // forceUpdate = true，因为这是用户刚发送的消息，需要立即显示
+            await loadMessages(currentTopicId, false, true);
             await loadTopics(); // 更新话题列表（更新时间）
         }
     } catch (error) {
@@ -959,10 +1175,11 @@ function startMessagePolling(topicId) {
         return;
     }
     
-    // 每2秒轮询一次新消息
+    // 每2秒轮询一次新消息（只在有新消息时才更新DOM）
     messagePollInterval = setInterval(async () => {
         if (currentTopicId === topicId) {
-            await loadMessages(topicId, true); // preserveScroll = true，保持滚动位置
+            // preserveScroll = true，保持滚动位置；forceUpdate = false，只在有新消息时更新
+            await loadMessages(topicId, true, false);
         } else {
             // 如果话题已切换，停止轮询
             stopMessagePolling();
@@ -976,7 +1193,7 @@ function stopMessagePolling() {
         clearInterval(messagePollInterval);
         messagePollInterval = null;
     }
-    lastMessageCount = 0;
+    lastMessageId = null;
 }
 
 // HTML 转义
