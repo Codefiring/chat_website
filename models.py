@@ -49,5 +49,6 @@ class Message(db.Model):
     topic_id = db.Column(db.Integer, db.ForeignKey('chat_topic.id'), nullable=False)
     role = db.Column(db.String(20), nullable=False)  # 'user' or 'assistant'
     content = db.Column(db.Text, nullable=False)
+    image_url = db.Column(db.String(500), nullable=True)  # 图片URL（如果消息包含图片）
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

@@ -80,6 +80,9 @@ function setupEventListeners() {
         }
     });
     
+    // 图片粘贴功能
+    messageInput.addEventListener('paste', handlePasteImage);
+    
     // 编辑话题模态框
     if (closeEditModal) closeEditModal.addEventListener('click', closeEditModalFunc);
     if (cancelEdit) cancelEdit.addEventListener('click', closeEditModalFunc);
@@ -289,9 +292,17 @@ function renderMessages(messages) {
             avatarText = username.charAt(0).toUpperCase();
         }
         
+        let contentHtml = '';
+        if (msg.image_url) {
+            contentHtml += `<div class="message-image"><img src="${escapeHtml(msg.image_url)}" alt="图片" style="max-width: 100%; max-height: 400px; border-radius: 8px; cursor: pointer;" onclick="window.open('${escapeHtml(msg.image_url)}', '_blank')"></div>`;
+        }
+        if (msg.content) {
+            contentHtml += `<div class="message-text">${escapeHtml(msg.content)}</div>`;
+        }
+        
         messageDiv.innerHTML = `
             <div class="message-avatar">${avatarText}</div>
-            <div class="message-content">${escapeHtml(msg.content)}</div>
+            <div class="message-content">${contentHtml}</div>
         `;
         chatMessages.appendChild(messageDiv);
     });
@@ -677,6 +688,134 @@ async function saveProviderConfig() {
 }
 
 // 发送消息
+// 处理图片粘贴
+async function handlePasteImage(e) {
+    const items = e.clipboardData.items;
+    
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+            e.preventDefault();
+            
+            const file = items[i].getAsFile();
+            if (!file) return;
+            
+            // 检查文件大小（限制为10MB）
+            if (file.size > 10 * 1024 * 1024) {
+                alert('图片大小不能超过10MB');
+                return;
+            }
+            
+            // 转换为base64
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const imageData = event.target.result;
+                
+                try {
+                    // 上传图片
+                    const uploadResponse = await fetch('/api/upload-image', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            image_data: imageData
+                        })
+                    });
+                    
+                    if (uploadResponse.ok) {
+                        const result = await uploadResponse.json();
+                        const imageUrl = result.image_url;
+                        
+                        // 如果有当前话题，直接发送图片消息
+                        if (currentTopicId) {
+                            await sendImageMessage(imageUrl, '');
+                        } else {
+                            // 如果没有话题，提示用户先选择话题
+                            alert('请先选择一个话题');
+                        }
+                    } else {
+                        const error = await uploadResponse.json();
+                        alert(error.error || '图片上传失败');
+                    }
+                } catch (error) {
+                    console.error('图片上传失败:', error);
+                    alert('图片上传失败，请重试');
+                }
+            };
+            reader.readAsDataURL(file);
+            break;
+        }
+    }
+}
+
+// 发送图片消息
+async function sendImageMessage(imageUrl, textContent = '') {
+    if (!currentTopicId) {
+        alert('请先选择一个话题');
+        return;
+    }
+    
+    // 添加用户消息到界面
+    const userMessage = {
+        id: Date.now(),
+        role: 'user',
+        content: textContent,
+        image_url: imageUrl,
+        created_at: new Date().toISOString()
+    };
+    
+    currentMessages.push(userMessage);
+    renderMessages([...currentMessages]);
+    messageInput.value = '';
+    messageInput.style.height = 'auto';
+    
+    // 发送到服务器
+    try {
+        const response = await fetch(`/api/topics/${currentTopicId}/messages`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                role: 'user',
+                content: textContent,
+                image_url: imageUrl
+            })
+        });
+        
+        if (response.ok) {
+            const savedMessage = await response.json();
+            userMessage.id = savedMessage.id;
+            
+            // 检查是否需要调用AI（如果消息包含@模型关键词）
+            const shouldCallAI = textContent && (
+                textContent.toLowerCase().includes('@模型') ||
+                textContent.toLowerCase().includes('@model') ||
+                textContent.toLowerCase().includes('@ai') ||
+                textContent.toLowerCase().includes('@assistant') ||
+                textContent.toLowerCase().includes('@助手')
+            );
+            
+            if (shouldCallAI) {
+                // AI回复逻辑会在后端处理
+                await loadMessages(currentTopicId);
+            }
+        } else {
+            const error = await response.json();
+            alert(error.error || '发送消息失败');
+            // 从界面移除失败的消息
+            currentMessages = currentMessages.filter(m => m.id !== userMessage.id);
+            renderMessages([...currentMessages]);
+        }
+    } catch (error) {
+        console.error('发送消息失败:', error);
+        alert('发送消息失败，请重试');
+        // 从界面移除失败的消息
+        currentMessages = currentMessages.filter(m => m.id !== userMessage.id);
+        renderMessages([...currentMessages]);
+    }
+}
+
 async function handleSendMessage(e) {
     e.preventDefault();
     

@@ -1,15 +1,23 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from models import db, User, ChatTopic, Message, ProviderConfig
 from datetime import datetime
 import os
 from openai import OpenAI
+import base64
+import uuid
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-change-this-in-production'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+# 确保上传目录存在
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db.init_app(app)
 
@@ -197,6 +205,110 @@ def get_users():
         'id': user.id,
         'username': user.username
     } for user in users])
+
+@app.route('/api/providers', methods=['GET'])
+@login_required
+def get_providers():
+    """获取所有服务提供商配置"""
+    providers = ProviderConfig.query.order_by(ProviderConfig.is_default.desc(), ProviderConfig.name.asc()).all()
+    return jsonify([{
+        'id': p.id,
+        'name': p.name,
+        'provider_type': p.provider_type,
+        'base_url': p.base_url,
+        'is_default': p.is_default
+    } for p in providers])
+
+@app.route('/api/providers', methods=['POST'])
+@login_required
+def create_provider():
+    """创建服务提供商配置"""
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    api_key = data.get('api_key', '').strip()
+    base_url = data.get('base_url', '').strip() or None
+    provider_type = data.get('provider_type', 'openai')
+    is_default = data.get('is_default', False)
+    
+    if not name or not api_key:
+        return jsonify({'error': '名称和API密钥不能为空'}), 400
+    
+    if ProviderConfig.query.filter_by(name=name).first():
+        return jsonify({'error': '配置名称已存在'}), 400
+    
+    # 如果设置为默认，取消其他默认配置
+    if is_default:
+        ProviderConfig.query.update({ProviderConfig.is_default: False})
+        db.session.commit()
+    
+    provider = ProviderConfig(
+        name=name,
+        provider_type=provider_type,
+        api_key=api_key,
+        base_url=base_url,
+        is_default=is_default
+    )
+    db.session.add(provider)
+    db.session.commit()
+    
+    return jsonify({
+        'id': provider.id,
+        'name': provider.name,
+        'provider_type': provider.provider_type,
+        'base_url': provider.base_url,
+        'is_default': provider.is_default
+    }), 201
+
+@app.route('/api/providers/<int:provider_id>', methods=['PUT'])
+@login_required
+def update_provider(provider_id):
+    """更新服务提供商配置"""
+    provider = ProviderConfig.query.get_or_404(provider_id)
+    data = request.get_json()
+    
+    if 'name' in data:
+        name = data.get('name', '').strip()
+        if name and name != provider.name:
+            if ProviderConfig.query.filter_by(name=name).first():
+                return jsonify({'error': '配置名称已存在'}), 400
+            provider.name = name
+    
+    if 'api_key' in data:
+        api_key = data.get('api_key', '').strip()
+        if api_key and api_key != '***':
+            provider.api_key = api_key
+    
+    if 'base_url' in data:
+        provider.base_url = data.get('base_url', '').strip() or None
+    
+    if 'provider_type' in data:
+        provider.provider_type = data.get('provider_type', 'openai')
+    
+    if 'is_default' in data:
+        is_default = data.get('is_default', False)
+        if is_default:
+            ProviderConfig.query.update({ProviderConfig.is_default: False})
+            db.session.commit()
+        provider.is_default = is_default
+    
+    db.session.commit()
+    
+    return jsonify({
+        'id': provider.id,
+        'name': provider.name,
+        'provider_type': provider.provider_type,
+        'base_url': provider.base_url,
+        'is_default': provider.is_default
+    })
+
+@app.route('/api/providers/<int:provider_id>', methods=['DELETE'])
+@login_required
+def delete_provider(provider_id):
+    """删除服务提供商配置"""
+    provider = ProviderConfig.query.get_or_404(provider_id)
+    db.session.delete(provider)
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/api/topics', methods=['GET'])
 @login_required
@@ -397,14 +509,16 @@ def create_message(topic_id):
     data = request.get_json()
     role = data.get('role', 'user')
     content = data.get('content', '')
+    image_url = data.get('image_url', None)  # 图片URL
     
-    if not content:
-        return jsonify({'error': '消息内容不能为空'}), 400
+    if not content and not image_url:
+        return jsonify({'error': '消息内容或图片不能为空'}), 400
     
     message = Message(
         topic_id=topic_id,
         role=role,
-        content=content
+        content=content or '',
+        image_url=image_url
     )
     db.session.add(message)
     
@@ -448,8 +562,48 @@ def create_message(topic_id):
         'id': message.id,
         'role': message.role,
         'content': message.content,
+        'image_url': message.image_url,
         'created_at': message.created_at.isoformat()
     }), 201
+
+@app.route('/api/upload-image', methods=['POST'])
+@login_required
+def upload_image():
+    """上传图片"""
+    try:
+        data = request.get_json()
+        image_data = data.get('image_data', '')  # base64编码的图片数据
+        
+        if not image_data:
+            return jsonify({'error': '图片数据不能为空'}), 400
+        
+        # 解析base64数据
+        if ',' in image_data:
+            header, image_data = image_data.split(',', 1)
+        
+        # 解码图片
+        image_bytes = base64.b64decode(image_data)
+        
+        # 生成文件名
+        filename = f"{uuid.uuid4().hex}.png"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # 保存文件
+        with open(filepath, 'wb') as f:
+            f.write(image_bytes)
+        
+        # 返回图片URL
+        image_url = f"/static/uploads/{filename}"
+        return jsonify({'image_url': image_url}), 200
+        
+    except Exception as e:
+        print(f"图片上传失败: {e}")
+        return jsonify({'error': '图片上传失败'}), 500
+
+@app.route('/static/uploads/<filename>')
+def uploaded_file(filename):
+    """提供上传的图片文件"""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 def generate_ai_response(topic_id, user_message, model_name=None):
     """调用OpenAI API生成回复"""
@@ -562,6 +716,17 @@ if __name__ == '__main__':
                         db.session.execute(text('UPDATE user SET is_admin = 1 WHERE username = \'admin\''))
                     db.session.commit()
                     print("✓ 数据库已自动迁移：添加了 is_admin 字段")
+            
+            # 检查并添加 message 表的 image_url 字段
+            if 'message' in table_names:
+                message_columns = [col['name'] for col in inspector.get_columns('message')]
+                if 'image_url' not in message_columns:
+                    if 'sqlite' in str(db.engine.url):
+                        db.session.execute(text('ALTER TABLE message ADD COLUMN image_url VARCHAR(500)'))
+                    else:
+                        db.session.execute(text('ALTER TABLE message ADD COLUMN image_url VARCHAR(500)'))
+                    db.session.commit()
+                    print("✓ 数据库已自动迁移：添加了 image_url 字段")
                 
         except Exception as e:
             print(f"数据库迁移检查完成（如果这是首次运行，这是正常的）")
