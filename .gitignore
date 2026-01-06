@@ -14,6 +14,7 @@ develop-eggs/
 dist/
 downloads/
 uploads/
+protected_uploads
 eggs/
 .eggs/
 lib/
