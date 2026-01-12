@@ -674,24 +674,26 @@ def create_message(topic_id):
     should_call_ai = False
     provider_for_message = None
     model_name_for_message = None
-    if role == 'user' and topic.enable_model:
-        ai_patterns = [
-            r'@\s*llm\b',
-            r'@模型',
-            r'@model',
-            r'@ai',
-            r'@assistant',
-            r'@助手'
-        ]
+    
+    if role == 'user':
+        # 先检查是否@了配置名称（即使话题未启用模型，@配置名称也应该工作）
         provider_for_message = find_provider_for_message(content)
-        should_call_ai = (
-            provider_for_message is not None or
-            any(re.search(pattern, content, re.IGNORECASE) for pattern in ai_patterns)
-        )
         
-        # 如果找到了指定的provider，使用其模型名称
+        # 如果@了配置名称，直接触发AI回复
         if provider_for_message:
+            should_call_ai = True
             model_name_for_message = provider_for_message.model_name
+        # 如果话题启用了模型，检查是否@了通用关键词
+        elif topic.enable_model:
+            ai_patterns = [
+                r'@\s*llm\b',
+                r'@模型',
+                r'@model',
+                r'@ai',
+                r'@assistant',
+                r'@助手'
+            ]
+            should_call_ai = any(re.search(pattern, content, re.IGNORECASE) for pattern in ai_patterns)
     
     # 只有@模型时才调用AI生成回复
     if should_call_ai:
@@ -887,8 +889,13 @@ def find_provider_for_message(content):
     providers = ProviderConfig.query.order_by(ProviderConfig.name.asc()).all()
     if not providers:
         return None
+    # 按名称长度从长到短排序，优先匹配更长的名称（避免短名称误匹配）
     for provider in sorted(providers, key=lambda p: len(p.name), reverse=True):
-        pattern = rf'@\s*{re.escape(provider.name)}\b'
+        # 使用更宽松的匹配模式：@后可以有空格，然后是配置名称
+        escaped_name = re.escape(provider.name)
+        # 匹配：@ + 可选空格 + 配置名称，后面跟着非字母数字字符或字符串结尾
+        # 这样可以匹配 "@test"、"@test "、"@test," 等
+        pattern = rf'@\s*{escaped_name}(?=\s|$|[^\w\u4e00-\u9fa5])'
         if re.search(pattern, content, re.IGNORECASE):
             return provider
     return None
