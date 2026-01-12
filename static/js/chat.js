@@ -326,12 +326,21 @@ function renderMessages(messages, preserveScroll = false) {
     const hadNewMessages = currentMessages.length > 0 && messages.length > currentMessages.length;
     const wasAtBottom = isScrolledToBottom();
     
-    // 如果消息数量相同且ID都匹配，说明没有新消息，不需要更新DOM
+    // 如果消息数量相同且ID都匹配，检查是否有消息内容变化（如添加了图片）
     if (currentMessages.length === messages.length && currentMessages.length > 0) {
         const currentLastId = currentMessages[currentMessages.length - 1].id;
         const newLastId = messages[messages.length - 1].id;
-        if (currentLastId === newLastId) {
-            // 没有新消息，不需要更新
+        
+        // 检查最后一条消息是否有内容变化（比如添加了图片URL）
+        const currentLastMsg = currentMessages[currentMessages.length - 1];
+        const newLastMsg = messages[messages.length - 1];
+        const hasContentChange = currentLastMsg && newLastMsg && (
+            currentLastMsg.image_url !== newLastMsg.image_url ||
+            currentLastMsg.content !== newLastMsg.content
+        );
+        
+        if (currentLastId === newLastId && !hasContentChange) {
+            // 没有新消息且内容没有变化，不需要更新
             return;
         }
     }
@@ -1048,9 +1057,10 @@ async function sendImageMessage(imageUrl, textContent = '') {
         return;
     }
     
-    // 添加用户消息到界面
+    // 添加用户消息到界面（临时显示，等待服务器确认）
+    const tempMessageId = Date.now();
     const userMessage = {
-        id: Date.now(),
+        id: tempMessageId,
         role: 'user',
         content: textContent,
         username: window.currentUsername || 'U',
@@ -1058,10 +1068,12 @@ async function sendImageMessage(imageUrl, textContent = '') {
         created_at: new Date().toISOString()
     };
     
+    // 临时添加到消息列表并渲染
     currentMessages.push(userMessage);
     renderMessages([...currentMessages]);
     messageInput.value = '';
     messageInput.style.height = 'auto';
+    scrollToBottom(); // 确保滚动到底部
     
     // 发送到服务器
     try {
@@ -1079,26 +1091,32 @@ async function sendImageMessage(imageUrl, textContent = '') {
         
         if (response.ok) {
             const savedMessage = await response.json();
-            userMessage.id = savedMessage.id;
+            
+            // 从临时消息列表中移除临时消息
+            currentMessages = currentMessages.filter(m => m.id !== tempMessageId);
             
             // 更新最后一条消息ID
             lastMessageId = savedMessage.id;
             
-            // 重新加载消息以获取服务器返回的完整消息（包括可能的AI回复）
-            // forceUpdate = true，因为这是用户刚发送的消息，需要立即显示
+            // 强制重新加载所有消息，确保图片消息正确显示
+            // 先清空当前消息列表，强制完全重新渲染
+            currentMessages = [];
             await loadMessages(currentTopicId, false, true);
+            
+            // 更新话题列表（更新时间）
+            await loadTopics();
         } else {
             const error = await response.json();
             alert(error.error || '发送消息失败');
             // 从界面移除失败的消息
-            currentMessages = currentMessages.filter(m => m.id !== userMessage.id);
+            currentMessages = currentMessages.filter(m => m.id !== tempMessageId);
             renderMessages([...currentMessages]);
         }
     } catch (error) {
         console.error('发送消息失败:', error);
         alert('发送消息失败，请重试');
         // 从界面移除失败的消息
-        currentMessages = currentMessages.filter(m => m.id !== userMessage.id);
+        currentMessages = currentMessages.filter(m => m.id !== tempMessageId);
         renderMessages([...currentMessages]);
     }
 }

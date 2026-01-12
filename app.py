@@ -5,6 +5,7 @@ from models import db, User, ChatTopic, Message, ProviderConfig
 from datetime import datetime
 import re
 import os
+import time
 from openai import OpenAI
 import base64
 import uuid
@@ -777,18 +778,45 @@ def upload_image():
 def uploaded_file(filename):
     """提供上传的图片文件（需要权限校验）"""
     image_url = f"/media/{filename}"
-    message = Message.query.filter_by(image_url=image_url).first()
-    if not message:
-        return jsonify({'error': '图片不存在'}), 404
-
-    topic = ChatTopic.query.get_or_404(message.topic_id)
-    if not user_can_access_topic(topic):
-        return jsonify({'error': '无权访问此图片'}), 403
-
+    
+    # 首先检查文件是否存在
     encrypted_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{filename}.enc")
     if not os.path.exists(encrypted_path):
         return jsonify({'error': '图片不存在'}), 404
-
+    
+    # 尝试查找关联的消息
+    message = Message.query.filter_by(image_url=image_url).first()
+    
+    if message:
+        # 如果消息存在，检查topic权限
+        topic = ChatTopic.query.get_or_404(message.topic_id)
+        if not user_can_access_topic(topic):
+            return jsonify({'error': '无权访问此图片'}), 403
+    else:
+        # 如果消息不存在（图片刚上传，消息还未创建），
+        # 检查文件创建时间，如果是最近创建的（5分钟内），允许当前登录用户访问
+        # 这是因为图片上传时已经验证了权限，消息创建可能有短暂延迟
+        try:
+            file_mtime = os.path.getmtime(encrypted_path)
+            current_time = time.time()
+            # 如果文件不是最近5分钟内创建的，拒绝访问（消息应该已经创建了）
+            if current_time - file_mtime > 300:  # 5分钟 = 300秒
+                # 文件不是最近创建的，但消息不存在，可能是异常情况
+                # 查找所有包含此image_url的消息，检查用户是否有权限访问相关话题
+                messages_with_image = Message.query.filter_by(image_url=image_url).all()
+                has_permission = False
+                for msg in messages_with_image:
+                    topic = ChatTopic.query.get(msg.topic_id)
+                    if topic and user_can_access_topic(topic):
+                        has_permission = True
+                        break
+                if not has_permission:
+                    return jsonify({'error': '无权访问此图片'}), 403
+            # 文件是最近5分钟内创建的，允许当前登录用户访问（上传时已验证权限）
+        except OSError:
+            # 无法获取文件时间，拒绝访问
+            return jsonify({'error': '图片不存在'}), 404
+    
     try:
         with open(encrypted_path, 'rb') as encrypted_file:
             encrypted_bytes = encrypted_file.read()
